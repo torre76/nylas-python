@@ -1,14 +1,15 @@
 import requests
 import json
 from collections import namedtuple
-from conftest import API_BASE
+from base64 import b64encode
 
+API_BASE = "https://api.inboxapp.com/n/"
 
 class InboxAPIObject(dict):
     attrs = []
 
     def __init__(self):
-        self.dct = {}
+        pass
 
     __getattr__ = dict.__getitem__
     __setattr__ = dict.__setitem__
@@ -54,13 +55,7 @@ class Namespace(InboxAPIObject):
 
 class InboxClient(object):
     """A basic client for the Inbox API."""
-    apiBase = API_BASE
     Message = namedtuple('Message', 'id thread')
-
-    @classmethod
-    def namespaces(cls):
-        r = requests.get(cls.apiBase)
-        return r.json()
 
     @classmethod
     def from_email(cls, email_address):
@@ -79,35 +74,59 @@ class InboxClient(object):
                                          redirect_uri)
 
     @classmethod
-    def from_code(cls, app_id, app_secret, code):
+    def get_access_token(cls, app_id, app_secret, code):
         url = "https://www.inboxapp.com/oauth/token"
         params = {"client_id": app_id,
                   "client_secret": app_secret,
-                  "grant_type": authorization_code,
+                  "grant_type": 'authorization_code',
                   "code": code}
 
         headers = {'Content-type': 'application/x-www-form-urlencoded',
                    'Accept': 'text/plain'}
-        r = requests.post(url, params=params).json()
+        r = requests.post(url, data=params).json()
         access_token = r['access_token']
-        client = cls(token, apiBase="https://api.inboxapp.com")
+        return access_token
 
     @classmethod
-    def from_namespace(self, namespace, apiBase="http://localhost:5555/n/"):
-        """Only used for testing the API locally"""
-        self.namespace = namespace
-        self.apiBase = apiBase
+    def from_token(cls, token, apiBase=API_BASE):
+        return cls(token=token)
 
-    def __init__(self, namespace=None, apiBase=None, token=None):
-        self.namespace = namespace
+    @classmethod
+    def from_namespace(cls, namespace, apiBase=API_BASE):
+        """Only used for testing the API locally"""
+        return cls(namespace=namespace, apiBase=apiBase)
+
+    def __init__(self, namespace=None, apiBase=API_BASE, token=None):
+        self.default_namespace = namespace
         self.apiBase = apiBase
         self.token = token
+        self.session = requests.Session()
+        if token is not None:
+            # We're using the client against the authenticated API.
+            # add the necessary headers.
+            try:
+                token_encoded = b64encode(token + ':')
+            except TypeError:
+                token_encoded = b64encode(bytes(token + ':', 'UTF-8')).decode('UTF-8')
+
+            headers = {'Authorization': 'Basic ' + token_encoded,
+                       'X-Inbox-API-Wrapper': 'Python'}
+            self.session.headers.update(headers)
+
+            # Add a default namespace
+            if namespace is None:
+                self.default_namespace = self.get_namespaces(apiBase=apiBase)[0]
 
     def _get_resources(self, resource, cls, **kwargs):
-        url = "%s%s/%s?" % (self.apiBase, self.namespace, resource)
+        namespace = self.default_namespace
+        if 'namespace' in kwargs:
+            namespace = kwargs.pop('namespace')
+
+        url = "%s%s/%s?" % (self.apiBase, namespace, resource)
         for arg in kwargs:
             url += "%s=%s&" % (arg, kwargs[arg])
-        response = requests.get(url)
+
+        response = self.session.get(url)
         if response.status_code != 200:
             response.raise_for_status()
 
@@ -119,12 +138,16 @@ class InboxClient(object):
 
     def _get_resource(self, resource, cls, resource_id, **kwargs):
         """Get an individual REST resource"""
-        url = "%s%s/%s/%s?" % (self.apiBase, self.namespace, resource,
+        namespace = self.default_namespace
+        if 'namespace' in kwargs:
+            namespace = kwargs.pop('namespace')
+
+        url = "%s%s/%s/%s?" % (self.apiBase, namespace, resource,
                                resource_id)
         for arg in kwargs:
             url += "%s=%s&" % (arg, kwargs[arg])
         url = url[:-1]
-        response = requests.get(url)
+        response = self.session.get(url)
         if response.status_code != 200:
             response.raise_for_status()
 
@@ -132,15 +155,23 @@ class InboxClient(object):
         return cls.from_dict(result)
 
     def _create_resource(self, resource, cls, contents):
-        url = "%s%s/%s" % (self.apiBase, self.namespace, resource)
-        response = requests.post(url, data=json.dumps(contents))
+        namespace = self.default_namespace
+        if 'namespace' in kwargs:
+            namespace = kwargs.pop('namespace')
+
+        url = "%s%s/%s" % (self.apiBase, namespace, resource)
+        response = self.session.post(url, data=json.dumps(contents))
         result = response.json()
         return cls.from_dict(result)
 
     def _create_resources(self, resource, cls, contents):
         """batch resource creation and parse the returned list"""
-        url = "%s%s/%s" % (self.apiBase, self.namespace, resource)
-        response = requests.post(url, data=json.dumps(contents))
+        namespace = self.default_namespace
+        if 'namespace' in kwargs:
+            namespace = kwargs.pop('namespace')
+
+        url = "%s%s/%s" % (self.apiBase, namespace, resource)
+        response = self.session.post(url, data=json.dumps(contents))
         result = response.json()
         ret = []
 
@@ -149,8 +180,12 @@ class InboxClient(object):
         return ret
 
     def _update_resource(self, resource, cls, id, data):
-        url = "%s%s/%s" % (self.apiBase, self.namespace, resource)
-        response = requests.post(url, data=json.dumps(data))
+        namespace = self.default_namespace
+        if 'namespace' in kwargs:
+            namespace = kwargs.pop('namespace')
+
+        url = "%s%s/%s" % (self.apiBase, namespace, resource)
+        response = self.session.post(url, data=json.dumps(data))
         if response.status_code != 200:
             response.raise_for_status()
 
@@ -158,7 +193,14 @@ class InboxClient(object):
         return cls.from_dict(result)
 
     def get_namespaces(self, **kwargs):
-        return self._get_resources("namespaces", Namespace, **kwargs)
+        response = self.session.get(self.apiBase)
+        result = response.json()
+        ret = []
+
+        for entry in result:
+            ret.append(Namespace.from_dict(entry))
+
+        return ret
 
     def get_messages(self, **kwargs):
         return self._get_resources("messages", Message, **kwargs)
@@ -176,7 +218,7 @@ class InboxClient(object):
         return self._get_resource("drafts", Draft, id, **kwargs)
 
     def get_files(self, **kwargs):
-        return self._get_resource("files", File, id, **kwargs)
+        return self._get_resources("files", File, id, **kwargs)
 
     def get_file(self, id, **kwargs):
         return self._get_resource("files", File, id, **kwargs)
@@ -189,7 +231,7 @@ class InboxClient(object):
 
     def create_files(self, body):
         url = "%s%s/files" % (self.apiBase, self.namespace)
-        response = requests.post(url, files=body)
+        response = self.session.post(url, files=body)
         result = response.json()
         ret = []
         for entry in result:
@@ -198,11 +240,11 @@ class InboxClient(object):
 
     def update_tags(self, thread_id, tags):
         url = "%s%s/threads/%s" % (self.apiBase, self.namespace, thread_id)
-        return requests.put(url, data=json.dumps(tags))
+        return self.session.put(url, data=json.dumps(tags))
 
     def send_message(self, message):
         url = "%s%s/send" % (self.apiBase, self.namespace)
-        send_req = requests.post(url, data=json.dumps(message))
+        send_req = self.session.post(url, data=json.dumps(message))
         return send_req
 
     def send_draft(self, draft_id):
