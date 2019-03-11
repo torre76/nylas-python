@@ -77,6 +77,7 @@ class APIClient(json.JSONEncoder):
         self.revoke_all_url = (
             api_server + "/a/{client_id}/accounts/{account_id}/revoke-all"
         )
+        self.ip_addresses_url = (api_server + "/a/{client_id}/ip_addresses")
 
         self.app_secret = app_secret
         self.app_id = app_id
@@ -127,15 +128,25 @@ class APIClient(json.JSONEncoder):
             if "Authorization" in self.session.headers:
                 del self.session.headers["Authorization"]
 
-    def authentication_url(self, redirect_uri, login_hint="", state=""):
+    def authentication_url(
+        self,
+        redirect_uri,
+        login_hint="",
+        state="",
+        scopes=("email", "calendar", "contacts"),
+    ):
         args = {
             "redirect_uri": redirect_uri,
             "client_id": self.app_id or "None",  # 'None' for back-compat
             "response_type": "code",
-            "scope": "email",
             "login_hint": login_hint,
             "state": state,
         }
+
+        if scopes:
+            if isinstance(scopes, str):
+                scopes = [scopes]
+            args["scopes"] = ",".join(scopes)
 
         url = URLObject(self.authorize_url).add_query_params(args.items())
         return str(url)
@@ -187,6 +198,15 @@ class APIClient(json.JSONEncoder):
         if keep_access_token != self.access_token:
             self.auth_token = None
             self.access_token = None
+
+    def ip_addresses(self):
+        ip_addresses_url = self.ip_addresses_url.format(
+            client_id=self.app_id)
+        headers = {"Content-Type": "application/json"}
+        headers.update(self.admin_session.headers)
+        resp = self.admin_session.get(ip_addresses_url, headers=headers)
+        return resp.json()
+
 
     @property
     def account(self):

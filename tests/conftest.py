@@ -1175,3 +1175,20 @@ def mock_revoke_all_tokens(mocked_responses, api_url, account_id, app_id):
         status=200,
         body=json.dumps({"success": True}),
     )
+
+
+@pytest.fixture
+def mock_ip_addresses(mocked_responses, api_url, app_id):
+    ip_addresses_url = "{base}/a/{app_id}/ip_addresses".format(
+        base=api_url, app_id=app_id
+    )
+    mocked_responses.add(
+        responses.GET,
+        ip_addresses_url,
+        content_type="application/json",
+        status=200,
+        body = json.dumps({
+                        "ip_addresses": ["lots-of-ips"],
+                        "updated_at": 1552072984
+    }))
+
